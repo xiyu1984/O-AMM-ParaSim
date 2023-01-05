@@ -52,7 +52,7 @@ pub mod pallet {
 	}
 
 	impl TokenInfo {
-		fn new(t_name: Vec<u8>, t_amount: u128)-> Self {
+		pub fn new(t_name: Vec<u8>, t_amount: u128)-> Self {
 			TokenInfo {
 				t_name,
 				t_amount
@@ -63,51 +63,62 @@ pub mod pallet {
 	#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, TypeInfo)]
 	pub struct PoolInfo {
 		token_pair: (TokenInfo, TokenInfo),
-		b: u128,
-		c: u128
+		b_10000: u128,
+		c: u128,
+		swap_precision: u128
 	}
 
 	impl PoolInfo {
-		fn new(token1: TokenInfo, token2: TokenInfo)-> Self {
+		pub fn new(token1: TokenInfo, token2: TokenInfo)-> Self {
 			let mut p_info = PoolInfo {
 				token_pair: (token1, token2),
-				b: 0,
-				c: 0
+				b_10000: 0,
+				c: 0,
+				swap_precision: 10000
 			};
 
 			p_info._re_calculate_b_c();
 			p_info
 		}
 
-		pub fn swap(&mut self, d_in: TokenInfo, d_out: TokenInfo)-> bool {
-			if self._validate(&d_in, &d_out) {
-				let in_t_amount = self.get_token(&d_in.t_name).unwrap().t_amount + d_in.t_amount;
-				let out_t_amount = self.get_token(&d_out.t_name).unwrap().t_amount - d_out.t_amount;
-				self._set_token(d_in.t_name, in_t_amount);
-				self._set_token(d_out.t_name, out_t_amount); 
-				true                                                                                                                                                                                                                                                                       
-			} else {
-				false
+		/// the precision of `d_in`, `d_out` and `virtual_out` are both 10000, that is,
+		/// 
+		/// when the input is `12345678`, the real numerical value is `1234.5678`
+		/// 
+		pub fn swap(&mut self, d_in: TokenInfo, d_out: TokenInfo, virtual_out: u128)-> bool {
+			let mut in_t_amount = self.get_token(&d_in.t_name).unwrap().t_amount * self.swap_precision;
+			if self._validate(in_t_amount, virtual_out) {
+				in_t_amount += d_in.t_amount;
+				let out_t_amount = virtual_out - d_out.t_amount;
+
+				if self._validate(in_t_amount, out_t_amount) {
+					self._set_token(d_in.t_name, in_t_amount / self.swap_precision);
+
+					let real_out = self.get_token(&d_out.t_name).unwrap().t_amount - d_out.t_amount / self.swap_precision;
+					self._set_token(d_out.t_name, real_out);
+					return true;
+				}
 			}
+
+			false
 		}
 
-		pub fn _validate(&self, d_in: &TokenInfo, d_out: &TokenInfo)-> bool {
-			let in_t_amount = self.get_token(&d_in.t_name).unwrap().t_amount + d_in.t_amount;
-			let out_t_amount = self.get_token(&d_out.t_name).unwrap().t_amount - d_out.t_amount;
-			
-			let m = in_t_amount * out_t_amount;
-			let s = in_t_amount + out_t_amount;
+		pub fn _validate(&self, in_t_amount: u128, out_t_amount: u128)-> bool {
+			let m: u128 = in_t_amount * out_t_amount;
+			let s: u128 = in_t_amount + out_t_amount;
 
-			let coe = 10000;
+			let coe: u128 = 100000000;
 
-			let a = 4 * m * coe / (s^2);
+			let a: u128 = 4 * m * coe / (s * s);
+
+			let p2: u128 = self.swap_precision * self.swap_precision;
 
 			// let ms = m * s;
 			// let l = ms + a * 2 * s * ms / coe + self.c * s * a / coe;
 			// let r = a * ms / coe + a * 2 * self.b * ms / coe + self.c * s;
 
-			let l = 2 * m + a * (in_t_amount * in_t_amount + out_t_amount * out_t_amount) / coe + 2 * a * self.c / coe;
-			let r = a * self.b * s / coe + 2 * self.c;
+			let l: u128 = 2 * m / p2 + a * (in_t_amount * in_t_amount + out_t_amount * out_t_amount) / (coe * p2) + 2 * a * self.c / coe;
+			let r: u128 = a * self.b_10000 * s / (coe * p2) + 2 * self.c;
 
 			let mut delta = 0;
 			if l > r {
@@ -137,7 +148,7 @@ pub mod pallet {
 
 		fn _re_calculate_b_c(&mut self) {
 			self.c = self.token_pair.0.t_amount * self.token_pair.1.t_amount;
-			self.b = 2 * sqrt(self.c);
+			self.b_10000 = 2 * sqrt(self.c * 100000000);
 		}
 
 		pub fn reset(&mut self, token1: TokenInfo, token2: TokenInfo) {
@@ -240,15 +251,21 @@ pub mod pallet {
 			Ok(())
 		}
 
+		/// the precision of `d_in`, `d_out` and `virtual_out` are both 0.0001, that is,
+		/// 
+		/// when the input is `12345678`, the real numerical value is `1234.5678`
+		/// 
 		#[pallet::call_index(3)]
 		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1,1).ref_time())]
-		pub fn swap(origin: OriginFor<T>, pool_name: Vec<u8>, d_in: TokenInfo, d_out: TokenInfo) -> DispatchResult {
+		pub fn swap(origin: OriginFor<T>, pool_name: Vec<u8>, d_in: TokenInfo, d_out: TokenInfo, virtual_out: u128) -> DispatchResult {
 			let _who = ensure_signed(origin)?;
 
-			ensure!(TokenPool::<T>::contains_key(&pool_name), Error::<T>::PoolAlreadyExist);
+			// ensure!(TokenPool::<T>::contains_key(&pool_name), Error::<T>::PoolNotExist);
 
 			let mut swap_pool = TokenPool::<T>::get(&pool_name).ok_or(Error::<T>::PoolNotExist)?;
-			if swap_pool.swap(d_in, d_out) {
+			if swap_pool.swap(d_in, d_out, virtual_out) {
+				TokenPool::<T>::insert(&pool_name, swap_pool);
+				
 				Ok(())
 			} else {
 				Err(Error::<T>::InvalidAmount.into())
