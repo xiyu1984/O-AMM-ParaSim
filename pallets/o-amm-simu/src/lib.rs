@@ -18,9 +18,12 @@ mod benchmarking;
 pub mod pallet {
 	use frame_support::pallet_prelude::*;
 	use frame_system::pallet_prelude::*;
+	use sp_std::vec::Vec;
+	use codec::{Encode, Decode};
 
 	#[pallet::pallet]
 	#[pallet::generate_store(pub(super) trait Store)]
+	#[pallet::without_storage_info]
 	pub struct Pallet<T>(_);
 
 	/// Configure the pallet by specifying the parameters and types on which it depends.
@@ -37,6 +40,126 @@ pub mod pallet {
 	// Learn more about declaring storage items:
 	// https://docs.substrate.io/main-docs/build/runtime-storage/#declaring-storage-items
 	pub type Something<T> = StorageValue<_, u32>;
+
+	#[pallet::storage]
+	#[pallet::getter(fn token_pools)]
+	pub type TokenPool<T> = StorageMap<_, Blake2_128Concat, Vec<u8>, PoolInfo>;
+
+	#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, TypeInfo)]
+	pub struct TokenInfo {
+		t_name: Vec<u8>,
+		t_amount: u128
+	}
+
+	impl TokenInfo {
+		fn new(t_name: Vec<u8>, t_amount: u128)-> Self {
+			TokenInfo {
+				t_name,
+				t_amount
+			}
+		}
+	}
+
+	#[derive(Clone, PartialEq, Eq, Debug, Encode, Decode, TypeInfo)]
+	pub struct PoolInfo {
+		token_pair: (TokenInfo, TokenInfo),
+		b: u128,
+		c: u128
+	}
+
+	impl PoolInfo {
+		fn new(token1: TokenInfo, token2: TokenInfo)-> Self {
+			let mut p_info = PoolInfo {
+				token_pair: (token1, token2),
+				b: 0,
+				c: 0
+			};
+
+			p_info._re_calculate_b_c();
+			p_info
+		}
+
+		pub fn swap(&mut self, d_in: TokenInfo, d_out: TokenInfo)-> bool {
+			if self._validate(&d_in, &d_out) {
+				let in_t_amount = self.get_token(&d_in.t_name).unwrap().t_amount + d_in.t_amount;
+				let out_t_amount = self.get_token(&d_out.t_name).unwrap().t_amount - d_out.t_amount;
+				self._set_token(d_in.t_name, in_t_amount);
+				self._set_token(d_out.t_name, out_t_amount); 
+				true                                                                                                                                                                                                                                                                       
+			} else {
+				false
+			}
+		}
+
+		pub fn _validate(&self, d_in: &TokenInfo, d_out: &TokenInfo)-> bool {
+			let in_t_amount = self.get_token(&d_in.t_name).unwrap().t_amount + d_in.t_amount;
+			let out_t_amount = self.get_token(&d_out.t_name).unwrap().t_amount - d_out.t_amount;
+			
+			let m = in_t_amount * out_t_amount;
+			let s = in_t_amount + out_t_amount;
+
+			let coe = 10000;
+
+			let a = 4 * m * coe / (s^2);
+
+			// let ms = m * s;
+			// let l = ms + a * 2 * s * ms / coe + self.c * s * a / coe;
+			// let r = a * ms / coe + a * 2 * self.b * ms / coe + self.c * s;
+
+			let l = 2 * m + a * (in_t_amount * in_t_amount + out_t_amount * out_t_amount) / coe + 2 * a * self.c / coe;
+			let r = a * self.b * s / coe + 2 * self.c;
+
+			let mut delta = 0;
+			if l > r {
+				delta = l - r;
+			} else if r > l {
+				delta = r - l;
+			}
+
+			if delta < 10 {
+				true
+			} else {
+				false
+			}
+		}
+
+		fn _set_token(&mut self, t_name: Vec<u8>, t_value: u128)-> bool {
+			if self.token_pair.0.t_name == t_name {
+				self.token_pair.0.t_amount = t_value;
+				true
+			} else if self.token_pair.1.t_name == t_name {
+				self.token_pair.1.t_amount = t_value;
+				true
+			} else {
+				false
+			}
+		}
+
+		fn _re_calculate_b_c(&mut self) {
+			self.c = self.token_pair.0.t_amount * self.token_pair.1.t_amount;
+			self.b = 2 * sqrt(self.c);
+		}
+
+		pub fn reset(&mut self, token1: TokenInfo, token2: TokenInfo) {
+			self.token_pair.0 = token1;
+			self.token_pair.1 = token2;
+			self._re_calculate_b_c();
+		}
+
+		pub fn get_token_pair(&self)-> (TokenInfo, TokenInfo) {
+			self.token_pair.clone()
+		}
+
+		pub fn get_token(&self, t_name: &Vec<u8>)-> Option<TokenInfo> {
+			if self.token_pair.0.t_name == *t_name {
+				Some(self.token_pair.0.clone())
+			} else if self.token_pair.1.t_name == *t_name {
+				Some(self.token_pair.1.clone())
+			} else {
+				None
+			}
+		}
+	}
 
 	// Pallets use events to inform users when important changes are made.
 	// https://docs.substrate.io/main-docs/build/events-errors/
@@ -55,6 +178,10 @@ pub mod pallet {
 		NoneValue,
 		/// Errors should have helpful documentation associated with them.
 		StorageOverflow,
+		TokenNotExist,
+		InvalidAmount,
+		PoolAlreadyExist,
+		PoolNotExist,
 	}
 
 	// Dispatchable functions allows users to interact with the pallet and invoke state changes.
@@ -99,6 +226,49 @@ pub mod pallet {
 					Ok(())
 				},
 			}
+		}
+
+		#[pallet::call_index(2)]
+		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1,1).ref_time())]
+		pub fn create_swap_pool(origin: OriginFor<T>, pool_name: Vec<u8>, token1: TokenInfo, token2: TokenInfo) -> DispatchResult {
+			let _who = ensure_signed(origin)?;
+
+			ensure!(!TokenPool::<T>::contains_key(&pool_name), Error::<T>::PoolAlreadyExist);
+
+			TokenPool::<T>::insert(&pool_name, PoolInfo::new(token1, token2));
+
+			Ok(())
+		}
+
+		#[pallet::call_index(3)]
+		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1,1).ref_time())]
+		pub fn swap(origin: OriginFor<T>, pool_name: Vec<u8>, d_in: TokenInfo, d_out: TokenInfo) -> DispatchResult {
+			let _who = ensure_signed(origin)?;
+
+			ensure!(TokenPool::<T>::contains_key(&pool_name), Error::<T>::PoolAlreadyExist);
+
+			let mut swap_pool = TokenPool::<T>::get(&pool_name).ok_or(Error::<T>::PoolNotExist)?;
+			if swap_pool.swap(d_in, d_out) {
+				Ok(())
+			} else {
+				Err(Error::<T>::InvalidAmount.into())
+			}
+		}
+	}
+
+	fn sqrt(d: u128)-> u128 {
+        if d > 3 {
+            let mut z = d;
+            let mut x = d / 2;
+            while x < z {
+                z = x;
+                // The same as `x = x + (y - x * x) / (2 * x);`
+                x = (d / x + x) / 2;
+            }
+
+            return z;
+        } else {
+			return 1;
 		}
 	}
 }
