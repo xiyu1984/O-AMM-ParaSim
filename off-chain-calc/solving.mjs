@@ -135,14 +135,41 @@ async function test_price() {
 }
 
 async function test_s_o_amm() {
-    let x = 10;
-    let y = 20;
+    let x = 10000;
+    let y = 20000;
 
     let C = x * y;
     let b = 2 * Math.sqrt(C);
 
-    await solve_O_AMM_from_X(x, b, C);
-    await solve_O_AMM_from_Y(y, b, C);
+    console.log(y - get_result('y', await solve_O_AMM({t_name: 'x', t_value: x}, b, C)));
+    console.log(x - get_result('x', await solve_O_AMM({t_name: 'y', t_value: y}, b, C)));
+}
+
+async function test_residuals() {
+    let x = 20000;
+    let y = 10000;
+
+    let C = x * y;
+    let b = 2 * Math.sqrt(C);
+
+    var x_point = x;
+    let y_point = get_result('y', await solve_O_AMM({t_name: 'x', t_value: x_point}, b, C));
+    console.log(y_point);
+
+    var y_real = y;
+
+    while (true) {
+        var dx = 30;
+        var y_swap = await swap({t_name: 'x', dx, x: x_point}, b, C);
+        console.log(y_swap);
+        console.log('residual: ', y_real - y_swap[0]);
+        y_real = y_real - y_swap[1];
+        x_point = x_point + dx;
+
+        if (y_real < 10) {
+            break;
+        }
+    }
 }
 
 // await solve();
@@ -151,3 +178,6 @@ async function test_s_o_amm() {
 // await test_s_o_amm();
 // await test_price();
 // await test_swap();
+
+// await test_residuals();
+await test_s_o_amm();
