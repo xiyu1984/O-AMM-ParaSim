@@ -1,6 +1,10 @@
 # Tutorial
 
 ## Operation
+### Create Simu-Token Pool
+* Create a token pool by calling the on-chain interface `createSwapPool` in `oammsModule`:  
+![img](./resource/create-token-pools.png)  
+
 ### Check Token Pools
 * You can check the details of the token pools with `Polkadot.js/app` as follows:  
     <p id="figure.1" align="center">Figure.1 Check the details on-chain</p>  
