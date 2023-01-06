@@ -81,7 +81,7 @@ pub mod pallet {
 			p_info
 		}
 
-		/// the precision of `d_in`, `d_out` and `virtual_out` are both 10000, that is,
+		/// the precision of `d_in`, `d_out` and `virtual_out` are both 0.0001, that is,
 		/// 
 		/// when the input is `12345678`, the real numerical value is `1234.5678`
 		/// 
@@ -251,9 +251,9 @@ pub mod pallet {
 			Ok(())
 		}
 
-		/// the precision of `d_in`, `d_out` and `virtual_out` are both 0.0001, that is,
+		/// the precision of `d_in`, `d_out` and `virtual_out` are both 0.0001
 		/// 
-		/// when the input is `12345678`, the real numerical value is `1234.5678`
+		/// For example, when the input is `12345678`, the real numerical value is `1234.5678`
 		/// 
 		#[pallet::call_index(3)]
 		#[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1,1).ref_time())]
